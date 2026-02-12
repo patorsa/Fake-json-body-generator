@@ -34,7 +34,6 @@ const ESCAPE_MAP: Record<string, string> = {
 const UNESCAPE_MAP: Record<string, string> = {
   '\\b': '\b',
   '\\f': '\f',
-  '\\n': '\n',
   '\\r': '\r',
   '\\t': '\t',
   '\\"': '"',
@@ -79,97 +78,36 @@ export const canBeEscaped = (text: string): boolean => {
 };
 
 /**
- * Finds the correct index of a nested key or array element by scanning only the current scope.
+ * Finds the matching pair of a bracket or brace at the given index.
  */
-export const findPathInString = (json: string, path: string): { index: number; length: number } | null => {
-  const segments = path.split('.').filter(s => s !== 'root');
-  if (segments.length === 0) return { index: 0, length: 1 };
+export const findMatchingBracket = (text: string, index: number): number => {
+  const char = text[index];
+  const pairs: Record<string, string> = { '{': '}', '[': ']', '}': '{', ']': '[' };
+  const target = pairs[char];
+  if (!target) return -1;
 
-  let cursor = 0;
-  let lastMatch = { index: -1, length: 0 };
+  const direction = (char === '{' || char === '[') ? 1 : -1;
+  let depth = 0;
+  let inString = false;
 
-  for (let i = 0; i < segments.length; i++) {
-    const segment = segments[i];
-    const isNumeric = !isNaN(Number(segment));
+  for (let i = index; direction > 0 ? i < text.length : i >= 0; i += direction) {
+    const c = text[i];
+    if (c === '"' && (i === 0 || text[i - 1] !== '\\')) inString = !inString;
+    if (inString) continue;
 
-    // Move cursor to start of current object or array content
-    while (cursor < json.length && !/[{\["]/.test(json[cursor]) && !/[0-9tfn\-]/.test(json[cursor])) {
-      cursor++;
-    }
+    if (c === char) depth++;
+    if (c === target) depth--;
 
-    if (isNumeric) {
-      const targetIndex = parseInt(segment, 10);
-      if (json[cursor] !== '[') return null;
-      cursor++; // step inside [
-
-      let currentElementIdx = 0;
-      while (currentElementIdx < targetIndex) {
-        const end = findEndOfValue(json, cursor);
-        if (end === -1) return null;
-        cursor = end;
-        // Skip whitespace and comma to get to next element
-        while (cursor < json.length && (/\s/.test(json[cursor]) || json[cursor] === ',')) {
-          cursor++;
-        }
-        currentElementIdx++;
-      }
-      
-      // We are at the start of the target element
-      const elementEnd = findEndOfValue(json, cursor);
-      lastMatch = { index: cursor, length: Math.min(2, elementEnd - cursor) }; // Highlight first 2 chars (e.g. "{ " or "[ ")
-      if (i === segments.length - 1) return lastMatch;
-      
-    } else {
-      // Find key "segment" at depth 0 of the current object
-      if (json[cursor] !== '{') return null;
-      const objectStart = cursor;
-      const objectEnd = findEndOfValue(json, objectStart);
-      
-      let keyFound = false;
-      let searchPtr = objectStart + 1;
-
-      while (searchPtr < objectEnd) {
-        // Skip to next potential key (must be a string at depth 1)
-        while (searchPtr < objectEnd && json[searchPtr] !== '"') {
-          searchPtr++;
-        }
-        if (searchPtr >= objectEnd) break;
-
-        const keyStart = searchPtr;
-        const keyEnd = findEndOfValue(json, keyStart);
-        const foundKey = json.substring(keyStart + 1, keyEnd - 1);
-
-        if (foundKey === segment) {
-          lastMatch = { index: keyStart, length: keyEnd - keyStart };
-          // Move cursor to the value of this key
-          searchPtr = keyEnd;
-          while (searchPtr < objectEnd && json[searchPtr] !== ':') searchPtr++;
-          searchPtr++; // Skip :
-          cursor = searchPtr;
-          keyFound = true;
-          break;
-        } else {
-          // Skip the value of this wrong key to stay at depth 1
-          searchPtr = keyEnd;
-          while (searchPtr < objectEnd && json[searchPtr] !== ':') searchPtr++;
-          searchPtr++;
-          searchPtr = findEndOfValue(json, searchPtr);
-          while (searchPtr < objectEnd && (/\s/.test(json[searchPtr]) || json[searchPtr] === ',')) searchPtr++;
-        }
-      }
-
-      if (!keyFound) return null;
-      if (i === segments.length - 1) return lastMatch;
-    }
+    if (depth === 0) return i;
   }
 
-  return lastMatch.index !== -1 ? lastMatch : null;
+  return -1;
 };
 
 /**
  * Helper to find the end index of a JSON value starting at a given index.
  */
-function findEndOfValue(json: string, start: number): number {
+export function findEndOfValue(json: string, start: number): number {
   let i = start;
   while (i < json.length && /\s/.test(json[i])) i++;
   if (i >= json.length) return -1;
@@ -192,10 +130,87 @@ function findEndOfValue(json: string, start: number): number {
       if (json[j] === '"' && json[j - 1] !== '\\') return j + 1;
     }
   } else {
-    // primitive
     const match = /[,\s\}\]]/.exec(json.substring(i));
     if (match) return i + match.index;
     return json.length;
   }
   return -1;
 }
+
+export const findPathInString = (json: string, path: string): { index: number; length: number } | null => {
+  const segments = path.split('.').filter(s => s !== 'root');
+  if (segments.length === 0) return { index: 0, length: 1 };
+
+  let cursor = 0;
+  let lastMatch = { index: -1, length: 0 };
+
+  for (let i = 0; i < segments.length; i++) {
+    const segment = segments[i];
+    const isNumeric = !isNaN(Number(segment));
+
+    while (cursor < json.length && !/[{\["]/.test(json[cursor]) && !/[0-9tfn\-]/.test(json[cursor])) {
+      cursor++;
+    }
+
+    if (isNumeric) {
+      const targetIndex = parseInt(segment, 10);
+      if (json[cursor] !== '[') return null;
+      cursor++; 
+
+      let currentElementIdx = 0;
+      while (currentElementIdx < targetIndex) {
+        const end = findEndOfValue(json, cursor);
+        if (end === -1) return null;
+        cursor = end;
+        while (cursor < json.length && (/\s/.test(json[cursor]) || json[cursor] === ',')) {
+          cursor++;
+        }
+        currentElementIdx++;
+      }
+      
+      const elementEnd = findEndOfValue(json, cursor);
+      lastMatch = { index: cursor, length: Math.min(2, elementEnd - cursor) }; 
+      if (i === segments.length - 1) return lastMatch;
+      
+    } else {
+      if (json[cursor] !== '{') return null;
+      const objectStart = cursor;
+      const objectEnd = findEndOfValue(json, objectStart);
+      
+      let keyFound = false;
+      let searchPtr = objectStart + 1;
+
+      while (searchPtr < objectEnd) {
+        while (searchPtr < objectEnd && json[searchPtr] !== '"') {
+          searchPtr++;
+        }
+        if (searchPtr >= objectEnd) break;
+
+        const keyStart = searchPtr;
+        const keyEnd = findEndOfValue(json, keyStart);
+        const foundKey = json.substring(keyStart + 1, keyEnd - 1);
+
+        if (foundKey === segment) {
+          lastMatch = { index: keyStart, length: keyEnd - keyStart };
+          searchPtr = keyEnd;
+          while (searchPtr < objectEnd && json[searchPtr] !== ':') searchPtr++;
+          searchPtr++; 
+          cursor = searchPtr;
+          keyFound = true;
+          break;
+        } else {
+          searchPtr = keyEnd;
+          while (searchPtr < objectEnd && json[searchPtr] !== ':') searchPtr++;
+          searchPtr++;
+          searchPtr = findEndOfValue(json, searchPtr);
+          while (searchPtr < objectEnd && (/\s/.test(json[searchPtr]) || json[searchPtr] === ',')) searchPtr++;
+        }
+      }
+
+      if (!keyFound) return null;
+      if (i === segments.length - 1) return lastMatch;
+    }
+  }
+
+  return lastMatch.index !== -1 ? lastMatch : null;
+};

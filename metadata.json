@@ -1,0 +1,5 @@
+{
+  "name": "JSON Master Studio",
+  "description": "A comprehensive JSON management tool featuring advanced formatting, minification, path-based navigation, and custom escaping/unescaping logic similar to JSTool.",
+  "requestFramePermissions": []
+}

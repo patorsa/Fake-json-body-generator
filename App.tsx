@@ -12,6 +12,7 @@ import Toolbar from './components/Toolbar';
 import JsonEditor from './components/JsonEditor';
 import JsonTreeView from './components/JsonTreeView';
 import FindReplacePanel from './components/FindReplacePanel';
+import Console, { LogEntry } from './components/Console';
 
 const App: React.FC = () => {
   const [jsonText, setJsonText] = useState<string>('');
@@ -19,12 +20,26 @@ const App: React.FC = () => {
   const [selection, setSelection] = useState<{ index: number; length: number } | null>(null);
   const [activePath, setActivePath] = useState<string>('');
   const [error, setError] = useState<string | null>(null);
+  const [accessToken, setAccessToken] = useState<string>('');
   
+  // Console state
+  const [logs, setLogs] = useState<LogEntry[]>([]);
+
   // Find/Replace state
   const [showSearch, setShowSearch] = useState(false);
   const [searchStats, setSearchStats] = useState({ current: 0, total: 0 });
   const [lastSearch, setLastSearch] = useState('');
   const [searchMatches, setSearchMatches] = useState<number[]>([]);
+
+  const addLog = useCallback((message: string, type: LogEntry['type'] = 'info') => {
+    const newLog: LogEntry = {
+      id: Math.random().toString(36).substring(7),
+      timestamp: new Date().toLocaleTimeString(),
+      type,
+      message
+    };
+    setLogs(prev => [...prev, newLog]);
+  }, []);
 
   const parsedData = useMemo(() => {
     try {
@@ -39,11 +54,21 @@ const App: React.FC = () => {
     return canBeEscaped(jsonText);
   }, [jsonText]);
 
+  const isAlreadyBody = useMemo(() => {
+    if (!parsedData || typeof parsedData !== 'object' || Array.isArray(parsedData)) return false;
+    const res = parsedData.response;
+    return !!(res && 
+           typeof res === 'object' &&
+           res.identifier && 
+           res.message !== undefined && 
+           res.request_id === "orderDetails" && 
+           res.type === "MCI");
+  }, [parsedData]);
+
   const saveToHistory = useCallback((text: string) => {
     setHistory(prev => {
-      // Evitar duplicados consecutivos en el historial
       if (prev.length > 0 && prev[prev.length - 1] === text) return prev;
-      return [...prev.slice(-19), text]; // Guardar últimos 20 pasos
+      return [...prev.slice(-19), text];
     });
   }, []);
 
@@ -53,6 +78,91 @@ const App: React.FC = () => {
     setHistory(prev => prev.slice(0, -1));
     setJsonText(lastState);
   }, [history]);
+
+  const handleGetTokenUAT = async () => {
+    addLog("Iniciando petición OAuth2 Token UAT...", "info");
+    
+    const url = 'https://identity-services.uat.elcorteingles.es:443/oauth2/token';
+    const params = new URLSearchParams();
+    params.append('grant_type', 'password');
+    params.append('username', 'firefly');
+    params.append('password', 'firefly');
+
+    const headers = {
+      'Authorization': 'Basic SG82VEtLR2o3SGdmN3FBRTZhUDJWRjh4alVNYTpSZXFWUFdSRXBocFRleGFBRF84QWExSE4wZjhh',
+      'Content-Type': 'application/x-www-form-urlencoded'
+    };
+
+    // Log curl command
+    const curlCommand = `curl --location '${url}' \\\n--header 'Authorization: ${headers.Authorization}' \\\n--header 'Content-Type: ${headers['Content-Type']}' \\\n--data-urlencode 'grant_type=password' \\\n--data-urlencode 'username=firefly' \\\n--data-urlencode 'password=firefly'`;
+    addLog(`EJECUTANDO:\n${curlCommand}`, "info");
+
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers,
+        body: params
+      });
+
+      const data = await response.json();
+      
+      if (response.ok) {
+        addLog("Token obtenido correctamente.", "success");
+        if (data.access_token) {
+          setAccessToken(data.access_token);
+          addLog(`Access Token guardado: ${data.access_token.substring(0, 15)}...`, "success");
+        }
+        addLog(JSON.stringify(data, null, 2), "success");
+      } else {
+        addLog(`Error en la petición de token (${response.status}):`, "error");
+        addLog(JSON.stringify(data, null, 2), "error");
+      }
+    } catch (err: any) {
+      addLog(`Error de red al obtener token: ${err.message}`, "error");
+      addLog("Nota: Es muy probable que este error sea por CORS al ejecutarlo desde el navegador.", "warning");
+    }
+  };
+
+  const handleCreateFakeResponseUAT = async () => {
+    const url = 'https://apigateway-uat.des-global.eci.geci/uat/orders/csc-postsales/v1/responses';
+    const headers = {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${accessToken}`
+    };
+    
+    // Generamos el curl plano para el log
+    const curlCommand = `curl --location '${url}' \\\n--header 'Content-Type: application/json' \\\n--header 'Authorization: Bearer ${accessToken || 'VACÍO'}' \\\n--data-raw '${jsonText}'`;
+    
+    addLog("Preparando petición Create Fake Response UAT...", "info");
+    addLog(`EJECUTANDO:\n${curlCommand}`, "info");
+
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: headers,
+        body: jsonText
+      });
+
+      let data;
+      const text = await response.text();
+      try {
+        data = text ? JSON.parse(text) : { message: "Respuesta vacía" };
+      } catch (e) {
+        data = { message: text };
+      }
+      
+      if (response.ok) {
+        addLog("Fake Response creada correctamente.", "success");
+        addLog(JSON.stringify(data, null, 2), "success");
+      } else {
+        addLog(`Error al crear Fake Response (${response.status}):`, "error");
+        addLog(JSON.stringify(data, null, 2), "error");
+      }
+    } catch (err: any) {
+      addLog(`Error de red al crear Fake Response: ${err.message}`, "error");
+      addLog("POSIBLES CAUSAS:\n1. Error de CORS (El navegador bloquea la petición).\n2. Sin acceso a la red interna de ECI/UAT.\n3. Certificado SSL no confiable.", "warning");
+    }
+  };
 
   useEffect(() => {
     if (!jsonText.trim()) {
@@ -69,12 +179,10 @@ const App: React.FC = () => {
 
   useEffect(() => {
     const handleGlobalKeyDown = (e: KeyboardEvent) => {
-      // Ctrl+F para buscar
       if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
         e.preventDefault();
         setShowSearch(true);
       }
-      // Ctrl+Z para deshacer
       if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
         if (history.length > 0) {
           e.preventDefault();
@@ -90,38 +198,39 @@ const App: React.FC = () => {
     saveToHistory(jsonText);
     const formatted = formatJson(jsonText);
     setJsonText(formatted);
+    addLog("JSON Formateado (JSFormat)", "info");
   };
 
   const handleMinify = () => {
     saveToHistory(jsonText);
     const minified = minifyJson(jsonText);
     setJsonText(minified);
+    addLog("JSON Minimizado (JSMin)", "info");
   };
 
   const handleEscape = () => {
     if (canEscapeAction) {
       saveToHistory(jsonText);
       setJsonText(escapeJson(jsonText));
+      addLog("Texto Escapado", "info");
     }
   };
 
   const handleUnescape = () => {
     saveToHistory(jsonText);
     setJsonText(unescapeJson(jsonText));
+    addLog("Texto Desescapado", "info");
   };
 
   const handleGenerateBody = () => {
+    if (isAlreadyBody) return;
     saveToHistory(jsonText);
     
     let content = jsonText;
-    
     try {
-      // Intentamos parsear para minificar si es un JSON válido
       const parsed = JSON.parse(jsonText);
       content = JSON.stringify(parsed);
     } catch (e) {
-      // Si no es JSON válido (o es un fragmento), verificamos si ya parece estar escapado
-      // Si contiene \" y no es un JSON válido, probablemente es una cadena ya escapada
       if (jsonText.includes('\\"')) {
         content = unescapeJson(jsonText);
       }
@@ -137,15 +246,15 @@ const App: React.FC = () => {
       }
     };
     
-    // Al usar JSON.stringify sobre el objeto template, el campo 'message' 
-    // se escapará automáticamente exactamente una vez, generando el formato {\"order\":...}
     const bodyResult = JSON.stringify(template, null, 2);
     setJsonText(bodyResult);
     navigator.clipboard.writeText(bodyResult);
+    addLog("Estructura Body generada y copiada al portapapeles", "success");
   };
 
   const handleCopy = () => {
     navigator.clipboard.writeText(jsonText);
+    addLog("Contenido copiado al portapapeles", "info");
   };
 
   const handleClear = () => {
@@ -153,19 +262,17 @@ const App: React.FC = () => {
     setJsonText('');
     setSelection(null);
     setActivePath('');
+    addLog("Editor limpiado", "warning");
   };
 
   const handleSelectPath = (path: string) => {
     setActivePath(path);
     let currentText = jsonText;
-    
-    // Auto-format if on a single line to allow navigation
     if (!jsonText.includes('\n') && jsonText.trim().length > 0) {
         saveToHistory(jsonText);
         currentText = formatJson(jsonText);
         setJsonText(currentText);
     }
-    
     const found = findPathInString(currentText, path);
     if (found) {
       setSelection(found);
@@ -211,6 +318,7 @@ const App: React.FC = () => {
       setJsonText(newText);
       setLastSearch('');
       setSearchMatches([]);
+      addLog(`Reemplazada coincidencia: "${search}" por "${replacement}"`, "info");
     }
   };
 
@@ -222,6 +330,7 @@ const App: React.FC = () => {
     setLastSearch('');
     setSearchMatches([]);
     setSearchStats({ current: 0, total: 0 });
+    addLog(`Reemplazadas todas las coincidencias de "${search}"`, "info");
   };
 
   return (
@@ -252,12 +361,15 @@ const App: React.FC = () => {
         onClear={handleClear}
         onGenerateBody={handleGenerateBody}
         onUndo={handleUndo}
+        onGetTokenUAT={handleGetTokenUAT}
+        onCreateFakeResponseUAT={handleCreateFakeResponseUAT}
         isValid={!!parsedData}
         canEscape={canEscapeAction}
         canUndo={history.length > 0}
+        canGenerateBody={!isAlreadyBody}
       />
 
-      <main className="flex flex-grow overflow-hidden">
+      <main className="flex-grow flex overflow-hidden">
         <aside className="w-80 border-r border-slate-800 bg-slate-900/50 flex flex-col flex-shrink-0">
           <div className="p-3 bg-slate-800/50 text-[10px] font-bold uppercase tracking-[0.1em] text-slate-400 border-b border-slate-800 flex justify-between items-center">
             <span>JSViewer</span>
@@ -279,23 +391,27 @@ const App: React.FC = () => {
             />
           )}
 
-          <JsonEditor 
-            value={jsonText} 
-            onChange={(newText) => {
-              setJsonText(newText);
-            }} 
-            selection={selection}
-            onSelectionApplied={clearSelection}
-          />
-          {error && (
-            <div className="absolute bottom-4 right-6 left-20 bg-red-900/90 text-red-100 p-3 rounded-lg border border-red-700 text-xs mono shadow-2xl backdrop-blur-sm animate-in fade-in slide-in-from-bottom-2">
-              <div className="font-bold mb-1 flex items-center gap-2">
-                <span className="w-2 h-2 bg-red-500 rounded-full"></span>
-                JSON Error:
+          <div className="flex-grow relative overflow-hidden">
+            <JsonEditor 
+              value={jsonText} 
+              onChange={(newText) => {
+                setJsonText(newText);
+              }} 
+              selection={selection}
+              onSelectionApplied={clearSelection}
+            />
+            {error && (
+              <div className="absolute bottom-4 right-6 left-20 bg-red-900/90 text-red-100 p-3 rounded-lg border border-red-700 text-xs mono shadow-2xl backdrop-blur-sm z-50">
+                <div className="font-bold mb-1 flex items-center gap-2">
+                  <span className="w-2 h-2 bg-red-500 rounded-full"></span>
+                  JSON Error:
+                </div>
+                {error}
               </div>
-              {error}
-            </div>
-          )}
+            )}
+          </div>
+          
+          <Console logs={logs} onClear={() => setLogs([])} />
         </section>
       </main>
 

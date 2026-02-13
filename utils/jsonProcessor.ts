@@ -31,33 +31,41 @@ const ESCAPE_MAP: Record<string, string> = {
   '\\': '\\\\'
 };
 
-const UNESCAPE_MAP: Record<string, string> = {
-  '\\b': '\b',
-  '\\f': '\f',
-  '\\r': '\r',
-  '\\t': '\t',
-  '\\"': '"',
-  '\\\\': '\\'
-};
-
+/**
+ * Escapes characters according to specific rules:
+ * \b, \f, \n, \r, \t, ", \
+ */
 export const escapeJson = (text: string): string => {
   return text.split('').map(char => ESCAPE_MAP[char] || char).join('');
 };
 
+/**
+ * Unescapes character sequences back to their originals.
+ * Correctly handles \n and avoids common double-replace issues by using a single regex pass.
+ */
 export const unescapeJson = (text: string): string => {
-  let result = text;
-  Object.entries(UNESCAPE_MAP).forEach(([escaped, original]) => {
-    const regex = new RegExp(escaped.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g');
-    result = result.replace(regex, original);
+  return text.replace(/\\([bfnrt"\\])/g, (match, p1) => {
+    const map: Record<string, string> = {
+      'b': '\b',
+      'f': '\f',
+      'n': '\n',
+      'r': '\r',
+      't': '\t',
+      '"': '"',
+      '\\': '\\'
+    };
+    return map[p1] || match;
   });
-  return result;
 };
 
 export const canBeEscaped = (text: string): boolean => {
   if (!text) return false;
+  // Check for presence of characters that need escaping
   if (/[\b\f\n\r\t]/.test(text)) return true;
+  
   const chars = text.split('');
   for (let i = 0; i < chars.length; i++) {
+    // Unescaped double quote
     if (chars[i] === '"') {
       let backslashCount = 0;
       let j = i - 1;
@@ -67,6 +75,7 @@ export const canBeEscaped = (text: string): boolean => {
       }
       if (backslashCount % 2 === 0) return true;
     }
+    // Bare backslash (not part of a valid escape sequence)
     if (chars[i] === '\\') {
       const next = chars[i+1];
       if (!next || !['b', 'f', 'n', 'r', 't', '"', '\\'].includes(next)) {
@@ -119,7 +128,7 @@ export function findEndOfValue(json: string, start: number): number {
     let depth = 1;
     let inString = false;
     for (let j = i + 1; j < json.length; j++) {
-      if (json[j] === '"' && json[j - 1] !== '\\') inString = !inString;
+      if (json[j] === '"' && (j === 0 || json[j - 1] !== '\\')) inString = !inString;
       if (inString) continue;
       if (json[j] === open) depth++;
       if (json[j] === close) depth--;
@@ -127,7 +136,7 @@ export function findEndOfValue(json: string, start: number): number {
     }
   } else if (char === '"') {
     for (let j = i + 1; j < json.length; j++) {
-      if (json[j] === '"' && json[j - 1] !== '\\') return j + 1;
+      if (json[j] === '"' && (j === 0 || json[j - 1] !== '\\')) return j + 1;
     }
   } else {
     const match = /[,\s\}\]]/.exec(json.substring(i));

@@ -124,7 +124,7 @@ const App: React.FC = () => {
   };
 
   const handleCreateFakeResponseUAT = async () => {
-    const url = 'https://apigateway-uat.des-global.eci.geci/uat/orders/csc-postsales/v1/responses';
+    const url = 'https://apigateway-uat.des-global.eci.geci/orders/csc-postsales/v1/responses';
     const headers = {
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${accessToken}`
